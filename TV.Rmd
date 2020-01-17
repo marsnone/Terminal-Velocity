@@ -1,0 +1,979 @@
+---
+title: "Terminal Velocity"
+author: "Martin O'Neill"
+date: "1/10/2020"
+output: html_document
+---
+
+
+*rename trees:
+  - astertree <- phy
+  - ...
+  
+## Install Required Packages
+
+```{r installPackages, eval=FALSE, include=FALSE}
+install.packages(c("devtools", "readr", "Hmisc", "picante", "BIEN", "rotl", "brranching", "phytools", "geiger", "ape", "caper", "BAMMtools", "gratia", "visreg", "mgcv", "strap","taxise", "ncbit", "taxa", "taxonomizr", "taxizedb", "Taxonstand", "phylobase","diversitree", "reticulate", "BiocManager"))
+
+#initial installs requried from GitHub source as it it not available on CRAN
+devtools::install_github("ropenscilabs/datastorr")
+devtools::install_github("wcornwell/taxonlookup")
+
+BiocManager::install("ggtree") #Bioconductor package install
+```
+
+#### 1) Load required packages
+
+```{r loadVariousLibraries}
+library("rotl")
+library("geiger")
+library("ape")
+library("castor")
+#library("dcGOR")
+library("phytools") #used for handling phylogentic trees
+library("Hmisc")
+library("picante")
+library('phangorn')
+library("phylobase")
+#install.packages(dispeRsal)
+library("taxize")
+library("ncbit")
+library("wikitaxa")
+library("taxa")
+library("taxonlookup")
+library("taxonomizr")
+library("taxizedb")
+library("Taxonstand")
+library("readr")
+```
+
+## Data Retrieval and Handling:
+
+```{r setWorkingDirectory}
+#setwd("~/") #setting working directory not run on cloud
+```
+
+#### 2) Import Terminal Velocity Data
+
+```{r}
+library("readr")
+TV <- read_csv("TVEL.csv")
+head(TV)
+```
+
+#### 3) Clean and check the trait data
+
+```{r sortTVData}
+#LA <- na.omit(LA$trait_value)
+TV <- TV[rev(order(TV$velocity)),]
+TV <- TV[!duplicated(TV$species),]
+TV <- TV[!duplicated(TV),]
+TV <- TV[complete.cases(TV[ , 2]),]
+TV <- TV[complete.cases(TV[ , 1]),]
+write.csv(TV, file = "TV.csv",row.names=TRUE)
+```
+
+```{r sortTVData2}
+TV <- read_csv("TV.csv")
+TV<-TV[,-1]
+TV
+```
+
+#### 4) Retrieve a phylogentic tree for the species in the data
+
+The Newick tree for the phylogeny using the supertree constructed by Zanne et al. (2014) is downloaded using phylomatic() from the package "brrranching".
+
+Write the tree into a .newick file in the working directory to save it and then read it in the class 'as.phylo' (as oppossed to its original class 'as.phylomatic') to make it available for use by other packages that work using  different classes.
+
+(Set eval and include to TRUE if this is your first time running the chunk and then when the dataset download is complete and the file has been written to disk, set them back to FALSE to avoid having to resend the request to the phylodiversity.net server and waiting to download from it again)
+
+```{r retrievePhylomaticZanneTree}
+library("brranching")
+
+tv_phylomatic_tree <- phylomatic(TV$species, taxnames = TRUE, get = "POST", informat = "newick",
+                 method = "phylomatic", storedtree = "zanne2014", treeuri = NULL,
+                 taxaformat = "slashpath", outformat = "newick", clean = T,
+                 db = "apg", verbose = TRUE)
+
+write.tree(tv_phylomatic_tree, "TV_TREE.newick") #write tree to disk
+```
+
+Note that not all the species in the data may have been matched to a species in the source Phylomatic supertree. In this case, they will be missing from tree but not the data and thus have to be dealt with in Step 5 in order to have a workable data structure.
+
+```{r inspectPhylomaticTree}
+tvtree <- read.newick("TV_TREE.newick") 
+plot(tvtree, label.offset = 10, cex = 0.05) #have a quick look at the tree structure
+```
+
+Create .tre file
+```{r re-readTree, eval=FALSE, include=FALSE}
+write.tree(tvtree, file="TV_TREE.tre")
+tvtretree <- read.tree("TV_TREE.tre")
+```
+
+### 5) Resolve any polotomies in a tree, as many functions require dichotomous trees only:
+
+```{r dichotomousTree}
+tree <- multi2di(tvtree) #RESOVLES POLYTOMIES TO PRODUCE A DICHOTOMOUS TREE
+```
+
+```{r ultramericTree}
+is.ultrametric(tree)
+tree <- force.ultrametric(tree)
+is.ultrametric(tree)
+write.tree(tree, "TV_TREE_ULT_DI.newick") #save tree
+```
+
+#### 6) Format the tip labels of the tree
+
+Format the species names in the phylogenetic tree to be comparable to the species names associated with the trait data:
+
+```{r speciesNameFormatting}
+tree<-read.newick("TV_TREE_ULT_DI.newick")
+tree$tip.label <- strip_ott_ids(tree$tip.label, remove_underscores=TRUE) #REMOVES UNDERSCORES IN SPECIES NAMES
+tree$tip.label <- capitalize(tree$tip.label) # CAPITALISES THE GENUS NAME
+head(tree$tip.label)
+```
+
+Remove any names that cannot be matched:
+
+```{r pruneTree}
+#REMOVE '$tree_not_data'
+class(tree)
+tree <- as.phylo(tree)
+tree <- drop.tip(tree, setdiff(tree$tip.label, TV$species))
+
+#REMOVE '$data_not_tree'
+matches <- match(TV$species, tree$tip.label, nomatch = 0)
+TV <- subset(TV, matches != 0)
+TV <- TV[match(tree$tip.label,TV$species),] 
+head(tree$tip.label)
+head(TV)
+```
+
+#### 7) Format the trait data
+
+Here, a vector for the trait values is made for input into contMap() later.
+
+```{r tidyTraits}
+TV <- TV[match(tree$tip.label,TV$species),] #MATCH/ORDER NAMES IN DATA TO TREE
+trait <- as.vector(as.numeric(TV$log.velocity)) 
+names(trait) <- TV$species
+head(trait)
+head(tree$tip.label)
+
+```
+
+Retrieve higher level taxonomic rankings for the species using the package "taxonlookup":
+
+```{r getHigherTaxa}
+library("taxonlookup")
+taxonomy <- lookup_table(as.character(tree$tip.label), by_species=TRUE)
+taxonomy
+taxonomy <- cbind(taxonomy, trait)
+taxonomy
+```
+
+Now, check that the species names in the tip labels of tree and the species column of data can be matched:
+
+```{r checkmatchTreeData}
+setdiff(tree$tip.label, TV$species) # $tree_not_data
+setdiff(TV$species, tree$tip.label) # $data_not_tree
+
+name.check(TV, tree)
+```
+
+No unmatched species were returned 
+
+#### 8)  Store the data as .csv file for
+
+```{r writeTraitdataFile}
+write.csv(TV, file = "TV.csv")
+TV_datasaved <- read.csv("TV.csv")
+```
+
+```{r ggtreeviz}
+#BiocManager::install("ggtree")
+library("ggtree")
+p <- ggtree(tree) + geom_tiplab(cex=0.15)
+p2 <- facet_plot(p, panel="Dot", data=taxonomy, geom=geom_point, aes(x=val, color=genus, pch=group))
+p3 <- facet_plot(p2, panel='Bar', data=taxonomy, geom=geom_segment, aes(x=0, xend=val, y=y, yend=y, size=2, color=order)) + theme_tree2()
+facet_plot(p3, panel="Boxplot", data=taxonomy, geom_boxplot, 
+            mapping = aes(x=val, group=family, color=order))
+#dev.off()
+```
+
+## Extract the Asteraceae phylogeny as a subtree:
+
+```{r asterMatch}
+asteraceae <- subset(taxonomy, family == "Asteraceae")
+phy <- extract.clade(mytree, 2094)
+phy$tip.label
+
+setdiff(phy$tip.label, rownames(asteraceae)) # $tree_not_data
+setdiff(rownames(asteraceae), phy$tip.label) # $data_not_tree
+
+name.check(asteraceae, phy)
+
+plot(phy, cex = 0.3, main = "Asteraceae Subtree")
+
+plot(mytree, cex=0.049, edge.width = 0.5, label.offset = 1, main = "Node for Asteraceae Subtree Extraction labelled 'A'")
+nodelabels("A", 2094, adj = 1.2)
+
+#castor::get_reds()
+```
+
+## Ancestral State Reconstruction:
+
+```{r remove"_", eval=FALSE, include=FALSE}
+tree$tip.label <- strip_ott_ids(tree$tip.label, remove_underscores=TRUE) #REMOVES UNDERSCORES IN SPECIES NAMES
+head(tree$tip.label)
+```
+
+Produce ancestral state 
+
+(to obtain a high quality zoom-able PDF plot where species names can be examined uncomment the two commented (#) lines code in this block (having run all previous code) in a .r script on RStudio Desktop))
+```{r contTraitMap}
+head(trait)
+asr <- contMap(tree, trait, fsize = c(0.1, 0.5))
+#pdf(file="TV_TREE.newick.pdf",width=15,height=25)
+plottree <- plot(asr, type = "fan", fsize = c(0.1, 0.5))
+#dev.off()
+```
+
+NB: Phylogenetic autocorreleation must be accounted for!
+
+[currentlynot run due to error!]
+```{r Phenogram, eval=FALSE, include=FALSE}
+#phenogram
+phenogram(tree, trait, spread.labels = TRUE, fsize = c(0.001, 0.5))
+#par(mai=c(2.02,1.82,0.82,0.42))
+
+#density traitgram (95% CI)
+fancyTree(tree, type = "phenogram95", x = trait, spread.labels = TRUE, fsize = c(0.001, 0.5))
+```
+
+The tree on a geological timescale:
+
+```{r plotGeoTimeSacle}
+library("strap") #loading the library
+tree$root.time <- max(nodeHeights(tree))
+geoscalePhylo(tree, cex.ts=0.6, cex.tip=0.05)
+```
+
+## Phlyogenetic Signal:
+
+### Blomberg's k
+
+```{r Kcalc}
+Kcalc(trait[tree$tip.label], tree)
+```
+
+```{r phylosig:k}
+phylosig(tree, trait, test=TRUE)
+```
+
+```{r }
+phylosignal(trait[tree$tip.label], tree, reps = 1000)
+```
+
+### Pagel's Lambda
+
+```{r phylosig:Lambda}
+phylosig(tree, trait, test=TRUE, method = "lambda")
+```
+
+e.g. "With a lambda estimate close to zero and a highly significant p
+-value, we can see there is some evidence of
+phylogenetic signal here amongst our species."
+
+If we expect a particular model of evolution for our traits, we can specify those models and then compare their AICc values with other models of evolution. Let’s try Brownian motion (BM) model 
+compared with Ornstein-Uhlenbeck (OU). BM expects a random walk, whereas OU expects a random walk around a central tendency, expected under stabilizing selection.  First we fit the two models:
+
+```{r fitEvoModel}
+bm <- fitContinuous(phy=tree, dat=trait, model = "BM")
+ou <- fitContinuous(phy=tree, dat=trait, model = "OU")
+```
+
+Then we can compare the two models’AICcvalues to find the lower value, indicating more support.
+
+```{r compareEvoModel}
+bm$opt$aicc
+ou$opt$aicc
+```
+
+The OU model has slightly better support than the BM model
+
+```{r}
+p
+
+diversi.gof((branching.times(tree)), null = "exponential", z = NULL) 
+diversi.gof((branching.times(phy)), null = "exponential", z = NULL) 
+```
+
+
+### Using 'caper'
+
+Load the package caper:
+
+```{r loadCaper}
+library("caper")
+```
+```{r}
+TV
+```
+
+NB: To be used in comparative.data() the data needs to be be a data frame rather than a vector 
+
+```{r prepareCD}
+head(tree$tip.label)
+tree <- makeLabel(tree)
+head(tree$tip.label)
+tree$tip.label <- strip_ott_ids(tree$tip.label, remove_underscores=TRUE) #remove 
+head(tree$tip.label)
+tree$node.label <- with(tree, ((max(edge)-Nnode) +1):max(edge))
+tree$node.label
+#head(tree$tip.label)
+```
+
+```{r prepareCDcheck}
+df <-data.frame(species=TV$species, val=as.numeric(TV$log.velocity))
+df -> TV
+head(TV) #examine the trait vector format
+
+#head(tree$tip.label) 
+
+#head(tree$tip.label)  #check tip labels
+
+setdiff(tree$tip.label, TV$species) # $tree_not_data
+setdiff(TV$species, tree$tip.label) # $data_not_tree
+
+name.check(TV, tree)
+```
+
+```{r caperCD}
+comp_data <- comparative.data(data=TV, phy=tree, names.col="species", vcv=T)
+comp_data
+```
+
+```{r }
+est.lambda <- caper::pgls(val ~ 1, data = comp_data, lambda = "ML")
+summary(est.lambda)
+plot(est.lambda)
+
+pglsModelOU <- gls(val ~ 1, correlation = corMartins(3.808893 , phy = tree),
+                   data = TV, method = "ML")
+summary(pglsModelOU)
+plot(pglsModelOU)
+
+pglsModelPagel <- gls(val ~ 1, correlation = corPagel(0.342, phy = tree),
+                   data = TV, method = "ML")
+summary(pglsModelPagel)
+plot(pglsModelPagel)
+```
+
+### Plotting Phylogenetic Independent Contrasts of Node Values (PIC)
+
+```{r PIC}
+PICreconstruction <- ace(trait, tree, type="continuous", method="pic")
+traitvaluefinal <- c(trait, PICreconstruction$ace)
+library("strap") #loading the library
+tree$root.time <- max(nodeHeights(tree))
+geoscalePhylo(tree, cex.ts=0.6, cex.tip=0.05)
+tiplabels(pch = 21, cex=(trait)/1000)
+nodelabels(pch = 21, cex=(PICreconstruction$ace)/1000)
+```
+
+## GAM:
+
+```{r prepGAMdata}
+branchtimes <- branching.times(tree)
+StomaTime <- cbind(branchtimes, PICreconstruction$ace)
+write.csv(StomaTime, file = "StomaTime.csv",row.names=F)
+```
+
+```{r mgcv&visreg}
+StomaTime <- read.csv("StomaTime.csv")
+colnames(StomaTime)[2] <- "ace"
+
+library("mgcv")
+z <- gam(ace ~ s(branchtimes), data = StomaTime, family = gaussian,
+         method = "GCV.Cp") #residuals(z, type = "response")
+
+library("visreg")                        # regression model                                         # basic plot
+visreg(z, points.par = list(cex = 0.2, col = "red"))
+```
+
+[https://www.fromthebottomoftheheap.net/2018/10/23/introducing-gratia/]
+```{r gratia}
+library("gratia")
+k.check(z)
+draw(z)
+#vis.gam(z) #Error in vis.gam(z) : Model does not seem to have enough terms to do anything useful
+evaluate_smooth(z, "branchtimes")
+gam.check(z)
+appraise(z)
+```
+
+## Speciation and Extinction
+
+### a) Estimating the speciation & extinction rates from the phylogeny using ape
+
+The Nee et al. method for estimating speciation & extinction rates from a completely sampled phylogeny is implemented in the ape function birthdeath. Let's fit this model to our tree:
+
+```{r }
+library("ape")
+fit.bd<-birthdeath(tree)
+fit.bd
+```
+
+For computational reasons, birthdeath fits a re-parameterization of the birth-death model - estimating the derived parameters b-d and b/d. To solve for b and d, we can use this custom function on our fitted model object:
+
+```{r }
+bd<-function(x){
+    if(class(x)!="birthdeath") stop("x should be an object of class 'birthdeath'")
+    b<-x$para[2]/(1-x$para[1])
+    d<-b-x$para[2]
+    setNames(c(b,d),c("b","d"))
+}
+bd(fit.bd)
+```
+
+### b) Using simulation to explore birth-death in phytools
+
+Now that we have seen one empirical case, let's use phytools to explore the properties of birth-death trees (trees that arise by stochastic, constant-rate speciation & extinction).
+
+First, simulate birth & death trees in phytools. phytools function 'pbtree' (even though originally a pure-birth tree simulator only) can simulate under a variety of different models.
+
+Let's simulate under pure-birth using phytools. One experiment that might be fun is to examine the variance in number of lineages among trees given a particular set of simulation conditions:
+
+
+```{r }
+set.seed(10)
+b<-(log(100)-log(2))/100 ## results in E(lineages)=100 after t=100
+b
+```
+
+```{r }
+trees <- phytools::pbtree(b=b,t=100,nsim=200)
+n<-sapply(trees,Ntip)
+
+mean(n)
+var(n)
+```
+
+```{r }
+hist(n,xlab="number of species",main="number of species",col="grey",breaks=20)
+lines(rep(mean(n),2),par()$usr[3:4],lty="dashed",lwd=2)
+```
+
+From this we can see that the variance under pure-birth can be great. This increases when there is also extinction. For instance:
+
+```{r }
+d<-0.01
+dtrees <- phytools::pbtree(b=b+d,d=d,t=100,nsim=200,extant.only=TRUE,quiet=TRUE)
+n<-sapply(dtrees,function(x) if(!is.null(x)) Ntip(x) else 0)
+    
+mean(n)
+var(n)
+```
+
+```{r }
+hist(n,xlab="number of species",main="number of species",col="grey",breaks=20)
+lines(rep(mean(n),2),par()$usr[3:4],lty="dashed",lwd=2)
+```
+
+So we can see that the expected number of tips in a tree is determined only by b - d; however the variance increases with d!
+
+### c) Statistical properties of the Nee et al. method
+
+Although some recent papers have criticized the Nee et al. method (and others defended it), the point should still be made that when the model assumptions hold, it does perform just as it is supposed to.
+
+Specifically, we can demonstrate by fitting the model over our simulated distribution of trees, that the birth & death rates are unbiasedly estimated (albeit with substantial variance).
+
+I'm going to start by removing all the trees from our sample that either went extinct (only in the birth-death trees) or left fewer than 10 extant species (we would never fit this model for such a small tree).
+
+```{r}
+## remove any trees with no taxa
+trees<-trees[!sapply(trees,is.null)] 
+## remove any trees with <10 taxa
+trees<-trees[sapply(trees,function(x) length(x$tip.label)>=10)]
+obj<-lapply(trees,birthdeath)
+```
+
+```{r}
+BD<-t(sapply(obj,bd))
+par(mfrow=c(2,1))
+hh<-hist(BD[,1],breaks=20,xlab="estimated birth rate",main="birth rate")
+lines(rep(mean(BD[,1]),2),c(0,max(hh$counts)),lty="dotted",lwd=2,col="red")
+hh<-hist(BD[,2],breaks=20,xlab="estimated death rate",main="death rate")
+lines(rep(mean(BD[,2]),2),c(0,max(hh$counts)),lty="dotted",lwd=2,col="red")
+```
+
+Now let's try the same thing, but with our birth-death rate:
+
+```{r}
+BD<-t(sapply(obj,bd))
+colMeans(BD)
+```
+
+```{r}
+hh<-hist(BD[,1],breaks=20,xlab="estimated birth rate",main="birth rate")
+lines(rep(mean(BD[,1]),2),c(0,max(hh$counts)),lty="dotted",lwd=2,col="red")
+hh<-hist(BD[,2],breaks=20,xlab="estimated death rate",main="death rate")
+lines(rep(mean(BD[,2]),2),c(0,max(hh$counts)),lty="dotted",lwd=2,col="red")
+```
+
+So, we can see that Nee's method allows us to estimate diversification rates from reconstructed birth-death phylogenies; however these parameters are sometimes estimated with wide confidence limits, something that we can understand best by considering the very broad variance in outcome from the generating process.
+
+### d) Fitting a birth-death model using diversitree
+
+Load the 'diversitree' package
+
+```{r }
+library("diversitree")
+```
+
+Now, we can fit a Yule (pure-birth) model using diversitree. The way that the functions of diversitree work, we first built a model - then we use a generic function to optimize it. One of the advantages of diversitree is that it allows us to use incompletely sampled trees, and take that explicitly into consideration when fitting the model. In this case, we know the tree to contain about 1287 of 391,000 of described species, more or less 0.19%.
+
+```{r }
+divtree <- tree
+pbModel<-make.yule(divtree,sampling.f=(1287/391000))
+pbMLFit<-find.mle(pbModel,x.init=0.1)
+pbMLFit
+```
+
+Of course, we can also fit a birth-death model:
+
+```{r }
+bdModel<-make.bd(divtree,sampling.f=736/391000)
+bdMLFit<-find.mle(bdModel,c(0.1,0.05),method = "optim",lower = 0)
+bdMLFit
+```
+
+Again, using diversitree it is easy to compare the two models. This is essentially a test for the signature of extinction in our tree.
+
+```{r }
+# compare models
+anova(bdMLFit, pure.birth = pbMLFit)
+```
+
+""Here we see that although our MLE for the extinction rate is non-zero, the model does not significantly increase fit.""????
+
+Let's visualize the likelihood surface for λ & μ to see how broad it is for the extinction rate, μ.
+
+```{r }
+b<-seq(0.1,10,by=0.1)*pbMLFit$par[1]
+d<-b
+L<-sapply(b,function(b,d) sapply(d,function(d,b) bdModel(c(b,d)),b=b),d=d)
+persp(b,d,L,phi=45,theta=-45)
+```
+
+```{r }
+contour(b,d,L,nlevels=50)
+filled.contour(b,d,L,nlevels=50,color.palette=heat.colors)
+```
+
+Finally, diversitree also very easily permits us to design and run a Bayesian MCMC analysis of diversification. We do that as follows:
+
+```{r }
+bdSamples <- mcmc(bdModel, bdMLFit$par, nsteps = 1e+05, lower = c(0, 0), 
+    upper = c(Inf,Inf), w = c(0.1, 0.1), fail.value = -Inf, 
+    print.every = 10000)
+```
+
+```{r }
+## visualize the posterior sample
+postSamples <- bdSamples[c("lambda", "mu")]
+profiles.plot(postSamples, col.line = c("red", "blue"), las = 1, legend = "topright")
+```
+
+```{r }
+# often estimates of r (= lambda-mu) are more precise than either lambda and
+# mu
+postSamples$r <- with(bdSamples, lambda - mu)
+postSamples$eps <- with(bdSamples, mu/lambda)
+profiles.plot(postSamples[, c("r", "eps")], col.line = c("red", "blue"), las = 1, 
+    legend = "topright")
+```
+
+## QuaSSE
+
+```{r}
+mytree <- tree
+```
+
+Assume standard deviation of 1/50 for all species – this comes from nowhere in particular, and is probably over-confident in the terminal velocity estimates for most species.
+
+```{r }
+trait.sd <- 1/20
+```
+
+```{r eval=FALSE, include=FALSE}
+#testing
+make.quasse(mytree, trait, states.sd = trait.sd, 0.93, 0.27,sampling.f=(736/391000))
+tree.quasse(pars, max.taxa=Inf, max.t=Inf, include.extinct=FALSE, x0=NA,
+            single.lineage=TRUE, verbose=FALSE)
+phy <- tree.quasse(p, max.taxa=2000, x0=0, single.lineage=FALSE)
+```
+
+Here, we obtain starting point parameter estimates:
+
+```{r }
+p<-starting.point.quasse(mytree, trait)
+set.seed(1)
+p
+```
+
+Create a piecewise “linear” function. This is linear in the range [(xr[1]), xr[2]], and flat outside this range; this satisfies the condition that the derivatives of the speciation and extinction function with respect to the character state approach zero at the edges of the modelled parameter space.
+
+```{r }
+xr <- range(trait) + c(-1,1) * 20 * p["diffusion"]
+linear.x <- make.linear.x(xr[1], xr[2])
+```
+
+Because we are going to create a reasonable number of models, here is a function that simplifies this, requiring just speciation and extinction functions:
+
+he /sampling fraction is fglobalSamplingFraction is 736/391000 or `r $736/391000`, which refers to the 736 (`r len(trait)`) species in the dataset out of 391000 vascular plants (State of the World's Plants, 2016)
+
+```{r }
+make.stomata <- function(lambda, mu)
+make.quasse(mytree, trait, trait.sd, lambda, mu, sampling.f=(736/391000))
+```
+
+Create a function that constrains drift to zero. (for now)
+
+```{r }
+nodrift <- function(f)
+         constrain(f, drift ~ 0)
+```
+
+Create the likelihood functions where speciation is a constant, linear, sigmoidal, or hump-shaped function of log terminal velocity.
+
+```{r }
+f.c <- make.t(constant.x, constant.x)
+f.l <- make.stomata(linear.x, constant.x)
+f.s <- make.stomata(sigmoid.x, constant.x)
+f.h <- make.stomata(noroptimal.x, constant.x)
+```
+
+Start by fitting the constant model first (this will take quite a while).
+
+```{r constantnodriftML}
+control <- list(parscale=.1, reltol=0.001)
+mle.c <- find.mle(nodrift(f.c), p, lower=0, control=control, verbose=0)
+```
+
+Starting points for the constrained analyses based on this constrained fit (again, it will take even longer.)
+
+```{r }
+p.c <- mle.c$par
+p.l <- c(p.c[1], l.m=0, p.c[2:3])
+p.s <- p.h <- c(p.c[1], p.c[1], mean(xr), 1, p.c[2:3])
+names(p.s) <- argnames(nodrift(f.s))
+names(p.h) <- argnames(nodrift(f.h))
+mle.l <- find.mle(nodrift(f.l), p.l, control=control, verbose=0)
+mle.s <- find.mle(nodrift(f.s), p.s, control=control, verbose=0)
+mle.h <- find.mle(nodrift(f.h), p.h, control=control, verbose=0)
+```
+
+The fits can then be compared. These are all against the constant speciation rate fit (listed as “full” in the table). The support is strongest for the “hump” shaped fit.
+
+```{r nodriftANOVA}
+anova(mle.c, linear=mle.l, sigmoidal=mle.s, hump=mle.h)
+```
+
+Run the fits with the drift parameter added, starting from the constrained model’s ML parameters:
+
+```{r drfitML}
+mle.d.l <- find.mle(f.l, coef(mle.l, TRUE), control=control, verbose=0)
+mle.d.s <- find.mle(f.s, coef(mle.s, TRUE), control=control, verbose=0)
+mle.d.h <- find.mle(f.h, coef(mle.h, TRUE), control=control, verbose=0)
+```
+
+```{r }
+anova(mle.c, linear=mle.l, sigmoidal=mle.s, hump=mle.h,drift.linear=mle.d.l, drift.sigmoidal=mle.d.s, drift.hump=mle.d.h)
+```
+
+```{r }
+c(linear = coef(mle.d.l)[["drift"]], sigmoidal=coef(mle.d.s)[["drift"]], hump=coef(mle.d.h)[["drift"]])
+```
+
+## QuaSSE: Asteraceae
+
+```{r}
+f.cc <- make.quasse.split(mytree, trait, trait.sd, constant.x, constant.x,
+                          2094, Inf, sampling.f=(186/32913))
+argnames(f.cc)
+g.cc <- constrain(f.cc, drift.1 ~ 0, drift.2 ~ 0,diffusion.2 ~ diffusion.1)
+argnames(g.cc)
+p.cc <- c(p.c, p.c[1:2])
+names(p.cc) <- argnames(g.cc)
+mle.c$lnLik - g.cc(p.cc)
+mle.cc <- find.mle(g.cc, p.cc, control=control, lower=0, verbose=0)
+```
+
+```{r}
+f.ll <- make.quasse.split(mytree, trait, trait.sd, linear.x, constant.x,
+                          2094, Inf, sampling.f=(186/32913))
+g.ll <- constrain(f.ll, drift.1 ~ 0, drift.2 ~ 0,diffusion.2 ~ diffusion.1)
+g.lc <- constrain(g.ll, l.m.2 ~ 0)
+g.cl <- constrain(g.ll, l.m.1 ~ 0)
+#Generate a starting points: start with the function where both speciation rates are linear functions.
+p.cc <- coef(mle.cc)
+p.ll <- c(p.cc[1], 0, p.cc[2:4], 0, p.cc[5])
+names(p.ll) <- argnames(g.ll)
+#Run the ML searches for this model:
+mle.ll <- find.mle(g.ll, p.ll, control=control, verbose=0)
+```
+
+```{r}
+#Then generate starting points for models with just one of the sections of the tree having a linear speciation function:
+p.lc <- c(coef(mle.ll)[1:3], p.ll[c(4, 5, 7)])
+p.cl <- c(p.ll[c(1, 3, 4)], coef(mle.ll)[5:7])
+#and run the ML search:
+mle.lc <- find.mle(g.lc, p.lc, control=control, verbose=0)
+mle.cl <- find.mle(g.cl, p.cl, control=control, verbose=0)
+```
+
+```{r}
+#We can then compare the models again:
+anova(mle.cc,
+      part.linear.bg=mle.lc,
+      part.linear.fg=mle.cl,
+      part.linear=mle.ll)
+```
+
+Run the fits with the drift parameter added, starting from the constrained model’s ML parameters:
+
+```{r}
+mle.nd.lc <- find.mle(nodrift(g.lc), coef(mle.lc, TRUE), control=control, verbose=0)
+mle.nd.cl <- find.mle(nodrift(g.cl), coef(mle.cl, TRUE), control=control, verbose=0) 
+mle.nd.ll <- find.mle(nodrift(g.ll), coef(mle.ll, TRUE), control=control, verbose=0)  
+
+coef(mle.ll)
+```
+```{r}
+```
+
+
+## e) ES-sim
+
+Load the function from source as it is not compiled in a package on CRAN or in one easily accessible on GitHub
+
+```{r ES-sim}
+source("~/Documents/GitHub/PhyloTV/ES-sim-master/R/essim.R")
+essim(tree, trait, nsim = 1000)
+```
+
+## f) BAMM
+
+```{r BAMMtreesetup}
+BAMMtree <- tree
+options(scipen = 999)
+BAMMtree$edge.length <- format(BAMMtree$edge.length, scientific = FALSE)
+BAMMtree$edge.length <- as.numeric(BAMMtree$edge.length) + 0.00001
+BAMMtree$edge.length
+```
+
+```{r saveBAMMTree}
+write.tree(BAMMtree, "TV_BAMMTREE.newick")
+write.tree(BAMMtree, "TV_BAMMTREE.tre")
+NWK_BAMM_Tree <- read.newick("TV_BAMMTREE.newick")
+TRW_BAMM_Tree <- read.tree("TV_BAMMTREE.tre")
+```
+
+```{r}
+TV$species <- sub(" ", "_", TV$species)
+write.csv(TV, "TVtraitfile.csv")
+```
+
+Now the data is ready to be used
+```{r libBAMMtools}
+library("BAMMtools")
+```
+
+```{r swtBAMMPriors}
+#get bamm priors to supply to control file
+setBAMMpriors(read.tree("TV_BAMMTREE.newick"))
+readLines("myPriors.txt")
+
+```
+#[https://rdrr.io/cran/BAMMtools/man/generateControlFile.html]
+
+The globalSamplingFraction is 736/391000 or `r $736/391000` 
+`r len(trait)`, which refers to the 736 species in the dataset out of 391000 vascular plants (State of the World's Plants, 2016)
+```{r}
+generateControlFile(file = 'SE_control.txt',
+    params = list(
+    treefile = 'TV_BAMMTREE.newick',
+    globalSamplingFraction = '0.00188235294',
+    numberOfGenerations = '100000',
+    overwrite = '1',
+    #lambdaInitPrior = as.numeric(priors['lambdaInitPrior']),
+    #lambdaShiftPrior = as.numeric(priors['lambdaShiftPrior']),
+    #muInitPrior = as.numeric(priors['muInitPrior']),
+    expectedNumberOfShifts = '1'))
+
+#tx <- readLines("SE_control.txt")
+#tx  <- gsub(replace = "lambdaInitPrior = character(0)", pattern = "lambdaInitPrior = 13.2230144633187", x = tx)
+#tx <- gsub(replace = "lambdaShiftPrior = character(0)", pattern =  "lambdaShiftPrior = 0.00294671976366971", x = tx)
+#tx <- gsub(replace = "muInitPrior = character(0)", pattern = "muInitPrior = 13.2230144633187", x = tx)
+#tx
+#writeLines(tx, "SE_control.txt")
+
+readLines("SE_control.txt")
+```
+
+```{r }
+generateControlFile(file = 'traitcontrolr.txt', type = "trait",
+    params = list(
+    treefile = 'TV_BAMMTREE.newick',
+    #treefile = 'TV_Tree.tre',
+    traitfile = "TVtraitfile.txt",
+    #globalSamplingFraction = '0.00188235294', 736/391000 #DOI: 10.11646/phytotaxa.261.3.1
+    numberOfGenerations = '100000',
+    overwrite = '1',
+    #lambdaInitPrior = "13.2230144633187",          
+    #lambdaShiftPrior = "0.00294671976366971",         
+    #muInitPrior = "13.2230144633187",
+    expectedNumberOfShifts = '1'))
+readLines("traitcontrolr.txt")
+```
+
+```{bash BAMMterminalA, eval=FALSE, include=FALSE}
+cd ~/Documents/GitHub/Terminal-Velocity
+bamm -c traitcontrolr.txt
+```
+
+```{bash BAMMterminalB}
+cd ~/Documents/GitHub/Terminal-Velocity
+bamm -c SE_control.txt
+```
+
+```{r }
+#eventfile <- read.csv("event_data_template_trait.txt")
+#eventfile
+eventdata <- getEventData(NWK_BAMM_Tree, eventdata = "event_data.txt", 
+                          type ='trait', burnin=0.5)
+summary(eventdata)
+```
+
+
+Get prior distribution on shifts-per-branch:
+```{r }
+bp <- getBranchShiftPriors(NWK_BAMM_Tree, expectedNumberOfShifts = 5)
+```
+
+Pass the event data object in to the function:
+
+```{r }
+best <- getBestShiftConfiguration(eventdata, expectedNumberOfShifts = 5,
+                                  threshold = 30)
+plot(best, lwd=2)
+```
+
+
+```{r }
+addBAMMshifts(best, cex=2)
+```
+
+Now we can also work with the credible shift set:
+```{r }
+css <- credibleShiftSet(eventdata, expectedNumberOfShifts = 5, threshold = 30)
+
+summary(css)
+
+# examine model-averaged shifts from MAP configuration-
+# This gives us parameters, times, and associated nodes
+#   of each evolutionary rate regime (note that one of
+#   them corresponds to the root)
+css$eventData[[1:5]]
+```
+# Get bammdata representation of MAP configuration:
+```{r }
+bestcss <- getBestShiftConfiguration(css, expectedNumberOfShifts = 5,
+                                  threshold = 30)
+plot(bestcss)
+addBAMMshifts(bestcss)
+```
+
+```{r}
+# The first call to plot.bammdata
+# No calculations or assignments of rates have been made
+ed <- eventdata
+```
+```{r}
+## Not run: 
+# now plot.bammdata no longer calls dtRates
+ed_dtRates <- dtRates(ed, tau = 0.01)
+plot(ed_dtRates, lwd = 3, spex = "s")
+# color options
+plot(ed_dtRates, pal="temperature",lwd=3)
+plot(ed_dtRates, pal="terrain",lwd=3)
+plot(ed_dtRates, pal=c("darkgreen","yellow2","red"),lwd=3)
+plot(ed_dtRates,method="polar",pal="Spectral", lwd=3)
+plot(ed_dtRates,method="polar",pal="RdYlBu", lwd=3)
+```
+```{r}
+# Compare the different color breaks methods
+par(mfrow=c(1,3))
+plot(ed, lwd = 3, spex = "s", breaksmethod = "linear")
+title(main="linear")
+plot(ed, lwd = 3, spex = "s", breaksmethod = "quantile")
+title(main="quantile")
+plot(ed, lwd = 3, spex = "s", breaksmethod = "jenks")
+title(main="jenks")
+```
+
+```{r subtreeBAMM, eval=FALSE, include=FALSE}
+# you can plot subtrees while preserving the original 
+# rates to colors map by passing the colorbreaks object as an argument
+sed <- subtreeBAMM(ed, node = 1063)
+plot(sed, lwd = 3, colorbreaks = xx$colorbreaks)
+sed <- subtreeBAMM(ed, node = 140)
+plot(sed, lwd = 3, colorbreaks = xx$colorbreaks)
+# note how if we do not pass colorbreaks the map is 
+# no longer relative to the rest of the tree and the plot is quite
+# distinct from the original
+plot(sed, lwd = 3)
+
+# if you want to change the value of tau and the rates to colors map for
+# the entire tree
+ed <- dtRates(ed, tau = 0.002)
+xx <- plot(ed, lwd = 3, spex = "s")
+# now you can re-plot the subtrees using this finer tau partition
+sed <- subtreeBAMM(ed, node = 103)
+sed <- dtRates(sed, 0.002)
+plot(sed, lwd = 3, colorbreaks = xx$colorbreaks)
+sed <- subtreeBAMM(ed, node = 140)
+sed <- dtRates(sed, 0.002)
+plot(sed, lwd = 3, colorbreaks = xx$colorbreaks)
+```
+
+```{r}
+# multi-panel plotting and adding shifts of specific posterior samples
+par(mfrow=c(2,3))
+samples <- sample(1:length(ed$eventData), 6)
+ed <- dtRates(ed, 0.005)
+# individual plots will have a color map relative to the mean
+xx <- plot(ed, show=FALSE)
+for (i in 1:6) {
+    ed <- dtRates(ed, 0.005, samples[i])
+    plot(ed, colorbreaks=xx$colorbreaks)
+    addBAMMshifts(ed,index=samples[i],method="phylogram", par.reset=FALSE)	
+}
+```
+```{r}
+library("parallel")
+x <- traitDependentBAMM(ephy = ed, traits = TV, reps = 1000, rate = "extinction",
+                        return.full = TRUE, method = 's', logrates = TRUE,
+                        two.tailed = TRUE, traitorder = "positive,", nthread = 2)
+
+```
+
+
+
+
+
+
