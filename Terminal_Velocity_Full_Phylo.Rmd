@@ -206,63 +206,6 @@ facet_plot(p3, panel="Boxplot", data=taxonomy, geom_boxplot,
 #dev.off()
 ```
 
-## Extract the Asteraceae phylogeny as a subtree:
-
-```{r asterFilter}
-asteraceae <- subset(taxonomy, family == "Asteraceae")
-head(asteraceae)
-astertree <- extract.clade(tree, 2094)
-head(astertree$tip.label)
-length(astertree$tip.label)
-class(astertree)
-```
-Remove any names that cannot be matched:
-
-```{r pruneTree}
-#REMOVE '$tree_not_data'
-class(astertree)
-astertree <- as.phylo(astertree)
-astertree <- drop.tip(astertree, setdiff(astertree$tip.label, asteraceae$species))
-
-#REMOVE '$data_not_tree'
-astermatches <- match(asteraceae$species, astertree$tip.label, nomatch = 0)
-asteraceae <- subset(asteraceae, matches != 0)
-asteraceae <- asteraceae[match(astertree$tip.label,asteraceae$species),] 
-head(astertree$tip.label)
-head(asteraceae)
-```
-
-```{r asterMatch}
-evobiR::ReorderData(astertree, asteraceae, taxa.names="species")
-
-setdiff(astertree$tip.label, asteraceae$species) # $tree_not_data
-setdiff(asteraceae$species, astertree$tip.label) # $data_not_tree
-
-name.check(asteraceae, astertree)
-
-head(astertree$tip.label)
-head(asteraceae
-```
-
-
-```{r astervsfulltree}
-plot(tree, cex=0.049, edge.width = 0.5, label.offset = 1, main = "Node for Asteraceae Subtree Extraction labelled 'A'")
-nodelabels("A", 2094, adj = 1.2)
-
-plot(astertree, cex = 0.3, main = "Asteraceae Subtree")
-```
-
-
-```{r asterMatch}
-astertrait <- as.vector(as.numeric(asteraceae$log.velocity)) 
-names(astertrait) <- asteraceae$species
-head(astertrait)
-head(astertree$tip.label)
-length(astertrait)
-length(asteraceae$species)
-#castor::get_reds()
-```
-
 
 ## Ancestral State Reconstruction:
 
@@ -281,21 +224,16 @@ asr <- contMap(tree, trait, fsize = c(0.1, 0.5))
 plot_asr_tree <- plot(asr, type = "fan", fsize = c(0.1, 0.5))
 #dev.off()
 ```
-```{r}
-head(log(trait))
-asr <- contMap(tree, log(trait), fsize = c(0.1, 0.5))
-#pdf(file="TV_TREE.newick.pdf",width=15,height=25)
-plot_asr_tree <- plot(asr, type = "fan", fsize = c(0.1, 0.5))
+
+```{r contTraitMap(not log tranformed)}
+nltt <- exp(trait)
+head(nltt)
+nlt_asr <- contMap(tree, nltt, fsize = c(0.1, 0.5))
+#pdf(file="ASTER_TREE.newick.pdf",width=15,height=25)
+plot_asr_nltt <- plot(nlt_asr, type = "fan", fsize = c(0.1, 0.5))
 #dev.off()
 ```
 
-```{r contTraitMap}
-head(astertrait)
-asr <- contMap(astertree, astertrait, fsize = c(0.5, 0.5))
-#pdf(file="TV_TREE.newick.pdf",width=15,height=25)
-plot_asr_astet_tree <- plot(asr, type = "fan", fsize = c(0.5, 0.5))
-#dev.off()
-```
 NB: Phylogenetic autocorreleation must be accounted for!
 
 [currentlynot run due to error!]
@@ -314,9 +252,6 @@ The tree on a geological timescale:
 library("strap") #loading the library
 tree$root.time <- max(nodeHeights(tree))
 geoscalePhylo(tree, cex.ts=0.6, cex.tip=0.05)
-
-astertree$root.time <- max(nodeHeights(astertree))
-geoscalePhylo(astertree, cex.ts=0.6, cex.tip=0.05)
 ```
 
 ## Phlyogenetic Signal:
@@ -325,24 +260,20 @@ geoscalePhylo(astertree, cex.ts=0.6, cex.tip=0.05)
 
 ```{r Kcalc}
 Kcalc(trait[tree$tip.label], tree)
-Kcalc(astertrait[astertree$tip.label], astertree)
 ```
 
 ```{r phylosig:k}
 phylosig(tree, trait, test=TRUE)
-phylosig(astertree, astertrait, test=TRUE)
 ```
 
 ```{r }
 phylosignal(trait[tree$tip.label], tree, reps = 1000)
-phylosignal(astertrait[astertree$tip.label], astertree, reps = 1000)
 ```
 
 ### Pagel's Lambda
 
 ```{r phylosig:Lambda}
 phylosig(tree, trait, test=TRUE, method = "lambda")
-phylosig(astertree, astertrait, test=TRUE, method = "lambda")
 ```
 
 e.g. "With a lambda estimate close to zero and a highly significant p
@@ -355,9 +286,6 @@ compared with Ornstein-Uhlenbeck (OU). BM expects a random walk, whereas OU expe
 ```{r fitEvoModel}
 bm <- fitContinuous(phy=tree, dat=trait, model = "BM")
 ou <- fitContinuous(phy=tree, dat=trait, model = "OU")
-
-aster.bm <- fitContinuous(phy=astertree, dat=astertrait, model = "BM")
-aster.ou <- fitContinuous(phy=astertree, dat=astertrait, model = "OU")
 ```
 
 Then we can compare the two models’AICcvalues to find the lower value, indicating more support.
@@ -365,16 +293,12 @@ Then we can compare the two models’AICcvalues to find the lower value, indicat
 ```{r compareEvoModel}
 bm$opt$aicc
 ou$opt$aicc
-
-aster.bm$opt$aicc
-aster.ou$opt$aicc
 ```
 
 The OU model has slightly better support than the BM model
 
 ```{r}
 diversi.gof((branching.times(tree)), null = "exponential", z = NULL) 
-diversi.gof((branching.times(astertree)), null = "exponential", z = NULL) 
 ```
 
 
@@ -399,17 +323,6 @@ tree$node.label
 #head(tree$tip.label)
 ```
 
-```{r prepareCDaster}
-head(astertree$tip.label)
-astercdtree <- makeLabel(astertree)
-head(astertree$tip.label)
-tree$tip.label <- strip_ott_ids(astertree$tip.label, remove_underscores=TRUE) #remove 
-head(astertree$tip.label)
-astertree$node.label <- with(astertree, ((max(edge)-Nnode) +1):max(edge))
-astertree$node.label
-#head(tree$tip.label)
-```
-
 ```{r prepareCDcheck}
 df <-data.frame(species=TV$species, val=as.numeric(TV$log.velocity))
 df -> TV
@@ -425,30 +338,10 @@ setdiff(TV$species, tree$tip.label) # $data_not_tree
 name.check(TV, tree)
 ```
 
-```{r prepareCDcheck}
-df <-data.frame(species=asteraceae$species, val=as.numeric(asteraceae$log.velocity))
-df -> asteraceae
-head(asteraceae) #examine the trait vector format
-
-#head(tree$tip.label) 
-
-#head(tree$tip.label)  #check tip labels
-
-setdiff(astertree$tip.label, asteraceae$species) # $tree_not_data
-setdiff(asteraceae$species, astertree$tip.label) # $data_not_tree
-
-name.check(asteraceae, astertree)
-```
 
 ```{r caperCD}
 comp_data <- comparative.data(data=TV, phy=tree, names.col="species", vcv=T)
 comp_data
-```
-
-
-```{r caperCD}
-aster_comp_data <- comparative.data(data=asteraceae, phy=astertree, names.col="species", vcv=T)
-aster_comp_data
 ```
 
 ```{r }
@@ -467,22 +360,6 @@ summary(pglsModelPagel)
 plot(pglsModelPagel)
 ```
 
-```{r }
-aster_est.lambda <- caper::pgls(val ~ 1, data = aster_comp_data, lambda = "ML")
-summary(aster_est.lambda)
-plot(aster_est.lambda)
-
-aster_pglsModelOU <- gls(val ~ 1, correlation = corMartins(3.808893 , phy = astertree),
-                   data = asteraceae, method = "ML")
-summary(aster_pglsModelOU)
-plot(aster_pglsModelOU)
-
-aster_pglsModelPagel <- gls(val ~ 1, correlation = corPagel(0.342, phy = astertree),
-                   data = asteraceae, method = "ML")
-summary(aster_pglsModelPagel)
-plot(aster_pglsModelPagel)
-```
-
 ### Plotting Phylogenetic Independent Contrasts of Node Values (PIC)
 
 ```{r PIC}
@@ -492,13 +369,6 @@ tree$root.time <- max(nodeHeights(tree))
 geoscalePhylo(tree, cex.ts=0.6, cex.tip=0.05)
 tiplabels(pch = 21, cex=(trait)/1000)
 nodelabels(pch = 21, cex=(PICreconstruction$ace)/1000)
-
-asterPICreconstruction <- ace(astertrait, astertree, type="continuous", method="pic")
-astertraitvaluefinal <- c(astertrait, asterPICreconstruction$ace)
-astertree$root.time <- max(nodeHeights(astertree))
-geoscalePhylo(astertree, cex.ts=0.6, cex.tip=0.05)
-tiplabels(pch = 21, cex=(astertrait)/1000)
-nodelabels(pch = 21, cex=(asterPICreconstruction$ace)/1000)
 ```
 
 ## GAM:
@@ -507,10 +377,6 @@ nodelabels(pch = 21, cex=(asterPICreconstruction$ace)/1000)
 branchtimes <- branching.times(tree)
 PIC_BranchTime <- cbind(branchtimes, PICreconstruction$ace)
 write.csv(PIC_BranchTime, file = "PIC_BranchTime.csv",row.names=F)
-
-asterbranchtimes <- branching.times(astertree)
-aster_PIC_BranchTime <- cbind(asterbranchtimes, asterPICreconstruction$ace)
-write.csv(aster_PIC_BranchTime, file = "aster_PIC_BranchTime.csv",row.names=F)
 ```
 
 ```{r mgcv&visreg}
@@ -525,18 +391,6 @@ library("visreg")                        # regression model                     
 visreg(z, points.par = list(cex = 0.2, col = "red"))
 ```
 
-```{r mgcv&visreg}
-aster_PIC_BranchTime <- read.csv("PIC_BranchTime.csv")
-colnames(aster_PIC_BranchTime)[2] <- "ace"
-
-library("mgcv")
-aster_z <- gam(ace ~ s(asterbranchtimes), data = aster_PIC_BranchTime, family = gaussian,
-         method = "GCV.Cp") #residuals(z, type = "response")
-
-library("visreg")                        # regression model                                         # basic plot
-visreg(aster_z, points.par = list(cex = 0.2, col = "red"))
-```
-
 [https://www.fromthebottomoftheheap.net/2018/10/23/introducing-gratia/]
 ```{r gratia}
 library("gratia")
@@ -548,15 +402,6 @@ gam.check(z)
 appraise(z)
 ```
 
-```{r gratia}
-library("gratia")
-k.check(aster_z)
-draw(aster_z)
-#vis.gam(aster_z) #Error in vis.gam(aster_z) : Model does not seem to have enough terms to do anything useful
-evaluate_smooth(aster_z, "asterbranchtimes")
-gam.check(aster_z)
-appraise(aster_z)
-```
 ## Speciation and Extinction
 
 ### a) Estimating the speciation & extinction rates from the phylogeny using ape
@@ -567,9 +412,6 @@ The Nee et al. method for estimating speciation & extinction rates from a comple
 library("ape")
 fit.bd<-birthdeath(tree)
 fit.bd
-
-aster.fit.bd<-birthdeath(astertree)
-aster.fit.bd
 ```
 
 For computational reasons, birthdeath fits a re-parameterization of the birth-death model - estimating the derived parameters b-d and b/d. To solve for b and d, we can use this custom function on our fitted model object:
@@ -582,7 +424,6 @@ bd<-function(x){
     setNames(c(b,d),c("b","d"))
 }
 bd(fit.bd)
-bd(aster.fit.bd)
 ```
 
 ### b) Using simulation to explore birth-death in phytools
@@ -768,14 +609,14 @@ linear.x <- make.linear.x(xr[1], xr[2])
 
 Because we are going to create a reasonable number of models, here is a function that simplifies this, requiring just speciation and extinction functions:
 
-The sampling fraction is (globalSamplingFraction) is 736/391000 or `r $736/391000`, which refers to the 736 (`r len(trait)`) species in the dataset out of 391000 vascular plants (State of the World's Plants, 2016)
+The sampling fraction is (globalSamplingFraction) is 1287/391000 or `r 1287/391000`, which refers to the (`r length(trait)`) species in the dataset out of 391000 vascular plants (State of the World's Plants, 2016)
 
 ```{r }
-make.stomata <- function(lambda, mu)
+make.spex <- function(lambda, mu)
 #make.quasse(tree, trait, states.sd = trait.sd, 0.93, 0.27,sampling.f=(736/391000))
 #tree.quasse(pars, max.taxa=Inf, max.t=Inf, include.extinct=FALSE, x0=NA, single.lineage=TRUE, verbose=FALSE)
 #phy <- tree.quasse(p, max.taxa=2000, x0=0, single.lineage=FALSE)
-make.quasse(tree, trait, trait.sd, lambda, mu, sampling.f=(736/391000))
+make.quasse(tree, trait, trait.sd, lambda, mu, sampling.f=(1287/391000))
 ```
 
 Create a function that constrains drift to zero. (for now)
@@ -788,10 +629,10 @@ nodrift <- function(f)
 Create the likelihood functions where speciation is a constant, linear, sigmoidal, or hump-shaped function of log terminal velocity.
 
 ```{r }
-f.c <- make.t(constant.x, constant.x)
-f.l <- make.stomata(linear.x, constant.x)
-f.s <- make.stomata(sigmoid.x, constant.x)
-f.h <- make.stomata(noroptimal.x, constant.x)
+f.c <- make.spex(constant.x, constant.x)
+f.l <- make.spex(linear.x, constant.x)
+f.s <- make.spex(sigmoid.x, constant.x)
+f.h <- make.spex(noroptimal.x, constant.x)
 ```
 
 Start by fitting the constant model first (this will take quite a while).
@@ -836,70 +677,12 @@ anova(mle.c, linear=mle.l, sigmoidal=mle.s, hump=mle.h,drift.linear=mle.d.l, dri
 c(linear = coef(mle.d.l)[["drift"]], sigmoidal=coef(mle.d.s)[["drift"]], hump=coef(mle.d.h)[["drift"]])
 ```
 
-## QuaSSE: Asteraceae
-
-```{r}
-f.cc <- make.quasse.split(mytree, trait, trait.sd, constant.x, constant.x,
-                          2094, Inf, sampling.f=(186/32913))
-argnames(f.cc)
-g.cc <- constrain(f.cc, drift.1 ~ 0, drift.2 ~ 0,diffusion.2 ~ diffusion.1)
-argnames(g.cc)
-p.cc <- c(p.c, p.c[1:2])
-names(p.cc) <- argnames(g.cc)
-mle.c$lnLik - g.cc(p.cc)
-mle.cc <- find.mle(g.cc, p.cc, control=control, lower=0, verbose=0)
-```
-
-```{r}
-f.ll <- make.quasse.split(mytree, trait, trait.sd, linear.x, constant.x,
-                          2094, Inf, sampling.f=(186/32913))
-g.ll <- constrain(f.ll, drift.1 ~ 0, drift.2 ~ 0,diffusion.2 ~ diffusion.1)
-g.lc <- constrain(g.ll, l.m.2 ~ 0)
-g.cl <- constrain(g.ll, l.m.1 ~ 0)
-#Generate a starting points: start with the function where both speciation rates are linear functions.
-p.cc <- coef(mle.cc)
-p.ll <- c(p.cc[1], 0, p.cc[2:4], 0, p.cc[5])
-names(p.ll) <- argnames(g.ll)
-#Run the ML searches for this model:
-mle.ll <- find.mle(g.ll, p.ll, control=control, verbose=0)
-```
-
-```{r}
-#Then generate starting points for models with just one of the sections of the tree having a linear speciation function:
-p.lc <- c(coef(mle.ll)[1:3], p.ll[c(4, 5, 7)])
-p.cl <- c(p.ll[c(1, 3, 4)], coef(mle.ll)[5:7])
-#and run the ML search:
-mle.lc <- find.mle(g.lc, p.lc, control=control, verbose=0)
-mle.cl <- find.mle(g.cl, p.cl, control=control, verbose=0)
-```
-
-```{r}
-#We can then compare the models again:
-anova(mle.cc,
-      part.linear.bg=mle.lc,
-      part.linear.fg=mle.cl,
-      part.linear=mle.ll)
-```
-
-Run the fits with the drift parameter added, starting from the constrained model’s ML parameters:
-
-```{r}
-mle.nd.lc <- find.mle(nodrift(g.lc), coef(mle.lc, TRUE), control=control, verbose=0)
-mle.nd.cl <- find.mle(nodrift(g.cl), coef(mle.cl, TRUE), control=control, verbose=0) 
-mle.nd.ll <- find.mle(nodrift(g.ll), coef(mle.ll, TRUE), control=control, verbose=0)  
-
-coef(mle.ll)
-```
-```{r}
-```
-
-
 ## e) ES-sim
 
 Load the function from source as it is not compiled in a package on CRAN or in one easily accessible on GitHub
 
 ```{r ES-sim}
-source("~/Documents/GitHub/PhyloTV/ES-sim-master/R/essim.R")
+source("~/Documents/GitHub/Terminal-Velocity/ES-sim-master/R/essim.R")
 essim(tree, trait, nsim = 1000)
 ```
 
@@ -940,8 +723,8 @@ readLines("myPriors.txt")
 ```
 #[https://rdrr.io/cran/BAMMtools/man/generateControlFile.html]
 
-The globalSamplingFraction is 736/391000 or `r $736/391000` 
-`r len(trait)`, which refers to the 736 species in the dataset out of 391000 vascular plants (State of the World's Plants, 2016)
+The globalSamplingFraction is 736/391000 or `r 736/391000` 
+`r length(trait)`, which refers to the 736 species in the dataset out of 391000 vascular plants (State of the World's Plants, 2016)
 ```{r}
 generateControlFile(file = 'SE_control.txt',
     params = list(
@@ -1010,11 +793,8 @@ Pass the event data object in to the function:
 best <- getBestShiftConfiguration(eventdata, expectedNumberOfShifts = 5,
                                   threshold = 30)
 plot(best, lwd=2)
-```
-
-
-```{r }
-addBAMMshifts(best, cex=2)
+plot(best, lwd=2)
+addBAMMshifts(best, cex=1)
 ```
 
 Now we can also work with the credible shift set:
@@ -1027,7 +807,7 @@ summary(css)
 # This gives us parameters, times, and associated nodes
 #   of each evolutionary rate regime (note that one of
 #   them corresponds to the root)
-css$eventData[[1:5]]
+#css$eventData[[1:5]]
 ```
 # Get bammdata representation of MAP configuration:
 ```{r }

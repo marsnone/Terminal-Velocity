@@ -1,7 +1,7 @@
 Command line: bamm -c SE_control.txt
 Git commit id: 
-Random seed: 1578616435
-Start time: Fri Jan 10 00:33:55 2020
+Random seed: 1579558616
+Start time: Mon Jan 20 22:16:56 2020
 
 Current parameter settings:
        acceptanceInfoFileName    acceptance_info.txt
@@ -90,5 +90,5 @@ updateRateEventNumberForBranch    0.0
  useGlobalSamplingProbability    1
    validateEventConfiguration    0
    writeMeanBranchLengthTrees    0
-End time: Fri Jan 10 00:37:05 2020
+End time: Mon Jan 20 22:18:34 2020
 

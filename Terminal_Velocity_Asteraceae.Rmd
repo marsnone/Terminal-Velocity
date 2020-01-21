@@ -1,0 +1,820 @@
+---
+title: "Terminal Velocity Asteraceae"
+author: "Martin O'Neill"
+date: "1/19/2020"
+output: html_document
+---
+
+## Extract the Asteraceae phylogeny as a subtree:
+
+```{r asterFilter}
+aster <- subset(taxonomy, family == "Asteraceae")
+head(aster)
+extracted_astertree <- extract.clade(tree, 2094)
+head(extracted_astertree$tip.label)
+length(extracted_astertree$tip.label)
+class(extracted_astertree)
+```
+
+OR
+
+
+
+```{r Match}
+#evobiR::ReorderData(astertree, asteraceae, taxa.names="species")
+```
+
+
+#### Retrieve a phylogentic tree for the species in the data
+
+The Newick tree for the phylogeny using the supertree constructed by Zanne et al. (2014) is downloaded using phylomatic() from the package "brrranching".
+
+Write the tree into a .newick file in the working directory to save it and then read it in the class 'as.phylo' (as oppossed to its original class 'as.phylomatic') to make it available for use by other packages that work using  different classes.
+
+(Set eval and include to TRUE if this is your first time running the chunk and then when the dataset download is complete and the file has been written to disk, set them back to FALSE to avoid having to resend the request to the phylodiversity.net server and waiting to download from it again)
+
+```{r retrievePhylomaticZanneTree}
+library("brranching")
+
+aster_phylomatic_tree <- phylomatic(rownames(aster), taxnames = TRUE, get = "POST", informat = "newick",
+                 method = "phylomatic", storedtree = "zanne2014", treeuri = NULL,
+                 taxaformat = "slashpath", outformat = "newick", clean = T,
+                 db = "apg", verbose = TRUE)
+
+write.tree(aster_phylomatic_tree, "ASTER_TREE.newick") #write tree to disk
+```
+
+Note that not all the species in the data may have been matched to a species in the source Phylomatic supertree. In this case, they will be missing from tree but not the data and thus have to be dealt with in Step 5 in order to have a workable data structure.
+
+```{r inspectPhylomaticTree}
+astertree <- read.newick("ASTER_TREE.newick") 
+plot(astertree, label.offset = 10, cex = 0.1) #have a quick look at the tree structure
+```
+
+```{r astervsfulltree}
+plot(tree, cex=0.049, edge.width = 0.5, label.offset = 1, main = "Node for Asteraceae Subtree Extraction labelled 'A'")
+nodelabels("A", 2094, adj = 1.2)
+
+plot(extracted_astertree, cex = 0.3, main = "Asteraceae Subtree")
+```
+
+Create .tre file
+```{r re-readTree, eval=FALSE, include=FALSE}
+write.tree(astertree, file="ASTER_TREE.tre")
+aster_tre_tree <- read.tree("ASTER_TREE.tre")
+```
+
+### 5) Resolve any polotomies in a tree, as many functions require dichotomous trees only:
+
+```{r dichotomousTree}
+astertree <- multi2di(astertree) #RESOVLES POLYTOMIES TO PRODUCE A DICHOTOMOUS TREE
+```
+
+```{r ultramericTree}
+is.ultrametric(astertree)
+astertree <- force.ultrametric(astertree)
+is.ultrametric(astertree)
+write.tree(astertree, "ASTER_TREE_ULT_DI.newick") #save tree
+```
+
+#### 6) Format the tip labels of the tree
+
+Format the species names in the phylogenetic tree to be comparable to the species names associated with the trait data:
+
+```{r speciesNameFormatting}
+astertree<-read.newick("ASTER_TREE_ULT_DI.newick")
+astertree$tip.label <- strip_ott_ids(astertree$tip.label, remove_underscores=TRUE) #REMOVES UNDERSCORES IN SPECIES NAMES
+astertree$tip.label <- capitalize(astertree$tip.label) # CAPITALISES THE GENUS NAME
+head(astertree$tip.label)
+```
+
+Remove any names that cannot be matched:
+
+```{r pruneTree}
+#REMOVE '$tree_not_data'
+class(astertree)
+astertree <- as.phylo(astertree)
+astertree <- drop.tip(astertree, setdiff(astertree$tip.label, aster$species))
+
+#REMOVE '$data_not_tree'
+aster_matches <- match(aster$species, astertree$tip.label, nomatch = 0)
+aster <- subset(aster, aster_matches != 0)
+aster <- aster[match(astertree$tip.label,aster$species),] 
+head(astertree$tip.label)
+head(aster)
+```
+
+#### 7) Format the trait data
+
+Here, a vector for the trait values is made for input into contMap() later.
+
+```{r tidyTraits}
+aster <- aster[match(astertree$tip.label,aster$species),] #MATCH/ORDER NAMES IN DATA TO TREE
+astertrait <- as.vector(as.numeric(aster$log.velocity)) 
+names(astertrait) <- aster$species
+head(astertrait)
+head(astertree$tip.label)
+
+```
+```{r}
+summary(aster)
+length(astertrait)
+summary(astertree$tip.label)
+```
+
+Now, check that the species names in the tip labels of tree and the species column of data can be matched:
+
+```{r checkmatchTreeData}
+setdiff(astertree$tip.label, aster$species) # $tree_not_data
+setdiff(aster$species, astertree$tip.label) # $data_not_tree
+
+name.check(aster, astertree)
+```
+
+No unmatched species were returned 
+
+#### 8)  Store the data as .csv file
+
+```{r writeTraitdataFile}
+write.csv(aster, file = "ASTERACEAE.csv")
+aster_datasaved <- read.csv("ASTERACEAE.csv")
+```
+
+```{r ggtreeviz}
+#BiocManager::install("ggtree")
+library("ggtree")
+p_aster <- ggtree(astertree) + geom_tiplab(cex=0.15)
+p2_aster <- facet_plot(p_aster, panel="Dot", data=taxonomy, geom=geom_point, aes(x=log.velocity, color=genus, pch=group))
+p3_aster <- facet_plot(p2_aster, panel='Bar', data=taxonomy, geom=geom_segment, aes(x=0, xend=log.velocity, y=y, yend=y, size=2, color=genus)) + theme_tree2()
+facet_plot(p3_aster, panel="Boxplot", data=taxonomy, geom_boxplot, 
+            mapping = aes(x=log.velocity, group=family, color=order))
+#dev.off()
+```
+
+
+## Ancestral State Reconstruction:
+
+```{r remove"_", eval=FALSE, include=FALSE}
+astertree$tip.label <- strip_ott_ids(astertree$tip.label, remove_underscores=TRUE) #REMOVES UNDERSCORES IN SPECIES NAMES
+head(astertree$tip.label)
+```
+
+Produce ancestral state 
+
+(to obtain a high quality zoom-able PDF plot where species names can be examined uncomment the two commented (#) lines code in this block (having run all previous code) in an .r script)
+```{r contTraitMap}
+head(astertrait)
+aster_asr <- contMap(astertree, astertrait, fsize = c(0.1, 0.5))
+#pdf(file="ASTER_TREE.newick.pdf",width=15,height=25)
+plot_asr_astertree <- plot(aster_asr, type = "fan", fsize = c(0.1, 0.5))
+#dev.off()
+```
+
+```{r contTraitMap(not log tranformed)}
+nltat <- exp(astertrait)
+head(nltat)
+aster_asr <- contMap(astertree, nltat, fsize = c(0.1, 0.5))
+#pdf(file="ASTER_TREE.newick.pdf",width=15,height=25)
+plot_asr_nltat <- plot(aster_asr, type = "fan", fsize = c(0.1, 0.5))
+#dev.off()
+```
+
+NB: Phylogenetic autocorreleation must be accounted for!
+
+[currentlynot run due to error!]
+```{r Phenogram, eval=FALSE, include=FALSE}
+#phenogram
+phenogram(astertree, astertrait, spread.labels = TRUE, fsize = c(0.001, 0.5))
+#par(mai=c(2.02,1.82,0.82,0.42))
+
+#density traitgram (95% CI)
+fancyTree(astertree, type = "phenogram95", x = astertrait, spread.labels = TRUE, fsize = c(0.001, 0.5))
+```
+
+The tree on a geological timescale:
+
+```{r plotGeoTimeSacle}
+library("strap") #loading the library
+astertree$root.time <- max(nodeHeights(astertree))
+geoscalePhylo(astertree, cex.ts=0.6, cex.tip=0.05)
+```
+
+## Phlyogenetic Signal:
+
+### Blomberg's k
+
+```{r Kcalc}
+Kcalc(astertrait[astertree$tip.label], astertree)
+```
+
+```{r phylosig:k}
+phylosig(astertree, astertrait, test=TRUE)
+```
+
+```{r }
+phylosignal(astertrait[astertree$tip.label], astertree, reps = 1000)
+```
+
+### Pagel's Lambda
+
+```{r phylosig:Lambda}
+phylosig(astertree, astertrait, test=TRUE, method = "lambda")
+```
+
+e.g. "With a lambda estimate close to zero and a highly significant p
+-value, we can see there is some evidence of
+phylogenetic signal here amongst our species."
+
+If we expect a particular model of evolution for our traits, we can specify those models and then compare their AICc values with other models of evolution. Let’s try Brownian motion (BM) model 
+compared with Ornstein-Uhlenbeck (OU). BM expects a random walk, whereas OU expects a random walk around a central tendency, expected under stabilizing selection.  First we fit the two models:
+
+```{r fitEvoModel}
+bm_aster <- fitContinuous(phy=astertree, dat=astertrait, model = "BM")
+ou_aster <- fitContinuous(phy=astertree, dat=astertrait, model = "OU")
+```
+
+Then we can compare the two models’AICcvalues to find the lower value, indicating more support.
+
+```{r compareEvoModel}
+bm_aster$opt$aicc
+ou_aster$opt$aicc
+```
+
+The OU model has slightly better support than the BM model
+
+```{r}
+diversi.gof((branching.times(astertree)), null = "exponential", z = NULL) 
+```
+
+
+### Using 'caper'
+
+Load the package caper:
+
+```{r loadCaper}
+library("caper")
+```
+
+NB: To be used in comparative.data() the data needs to be be a data frame rather than a vector 
+
+```{r prepareCD}
+head(astertree$tip.label)
+astertree <- makeLabel(astertree)
+head(astertree$tip.label)
+astertree$tip.label <- strip_ott_ids(astertree$tip.label, remove_underscores=TRUE) #remove 
+head(astertree$tip.label)
+astertree$node.label <- with(astertree, ((max(edge)-Nnode) +1):max(edge))
+astertree$node.label
+#head(astertree$tip.label)
+```
+
+```{r prepareCDcheck}
+asterdf <-data.frame(species=aster$species, val=as.numeric(aster$log.velocity))
+asterdf -> aster
+head(aster) #examine the trait vector format
+
+#head(astertree$tip.label) 
+
+#head(astertree$tip.label)  #check tip labels
+
+setdiff(astertree$tip.label, aster$species) # $tree_not_data
+setdiff(aster$species, astertree$tip.label) # $data_not_tree
+
+name.check(aster, astertree)
+```
+
+
+```{r caperCD}
+aster_comp_data <- comparative.data(data=aster, phy=astertree, names.col="species", vcv=T)
+aster_comp_data
+```
+
+```{r }
+est.lambda_aster <- caper::pgls(val ~ 1, data = aster_comp_data, lambda = "ML")
+summary(est.lambda_aster)
+plot(est.lambda_aster)
+```
+
+
+```{r }
+pglsModelOU_aster <- gls(val ~ 1, correlation = corMartins(3.808893 , phy = astertree),
+                   data = aster, method = "ML")
+summary(pglsModelOU_aster)
+plot(pglsModelOU_aster)
+```
+
+
+```{r }
+pglsModelPagel_aster <- gls(val ~ 1, correlation = corPagel(0.342, phy = astertree),
+                   data = aster, method = "ML")
+summary(pglsModelPagel_aster)
+plot(pglsModelPagel_aster)
+```
+
+### Plotting Phylogenetic Independent Contrasts of Node Values (PIC)
+
+```{r PIC}
+asterPICreconstruction <- ace(astertrait, astertree, type="continuous", method="pic")
+astertraitvaluefinal <- c(astertrait, asterPICreconstruction$ace)
+astertree$root.time <- max(nodeHeights(astertree))
+geoscalePhylo(astertree, cex.ts=0.6, cex.tip=0.05)
+tiplabels(pch = 21, cex=(astertrait)/10)
+nodelabels(pch = 21, cex=(asterPICreconstruction$ace))
+```
+
+## GAM:
+
+```{r prepGAMdata}
+asterbranchtimes <- branching.times(astertree)
+asterPIC_BranchTime <- cbind(asterbranchtimes, asterPICreconstruction$ace)
+write.csv(asterPIC_BranchTime, file = "aster_PIC_BranchTime.csv",row.names=F)
+```
+
+```{r mgcv&visreg}
+asterPIC_BranchTime <- read.csv("aster_PIC_BranchTime.csv")
+colnames(asterPIC_BranchTime)[2] <- "ace"
+
+library("mgcv")
+z_aster <- gam(ace ~ s(asterbranchtimes), data = asterPIC_BranchTime, family = gaussian,
+         method = "GCV.Cp") #residuals(z, type = "response")
+
+library("visreg")                        # regression model                                         # basic plot
+visreg(z_aster, points.par = list(cex = 0.2, col = "red"))
+```
+
+[https://www.fromthebottomoftheheap.net/2018/10/23/introducing-gratia/]
+```{r gratia}
+library("gratia")
+k.check(z_aster)
+draw(z_aster)
+#vis.gam(z) #Error in vis.gam(z) : Model does not seem to have enough terms to do anything useful
+evaluate_smooth(z_aster, "branchtimes")
+gam.check(z_aster)
+appraise(z_aster)
+```
+
+## Speciation and Extinction
+
+### a) Estimating the speciation & extinction rates from the phylogeny using ape
+
+The Nee et al. method for estimating speciation & extinction rates from a completely sampled phylogeny is implemented in the ape function birthdeath. Let's fit this model to our tree:
+
+```{r }
+library("ape")
+fit.bd_aster<-birthdeath(astertree)
+fit.bd_aster
+```
+
+For computational reasons, birthdeath fits a re-parameterization of the birth-death model - estimating the derived parameters b-d and b/d. To solve for b and d, we can use this custom function on our fitted model object:
+
+```{r }
+bd<-function(x){
+    if(class(x)!="birthdeath") stop("x should be an object of class 'birthdeath'")
+    b<-x$para[2]/(1-x$para[1])
+    d<-b-x$para[2]
+    setNames(c(b,d),c("b","d"))
+}
+bd(fit.bd_aster)
+```
+
+### b) Using simulation to explore birth-death in phytools
+
+Now that we have seen one empirical case, let's use phytools to explore the properties of birth-death trees (trees that arise by stochastic, constant-rate speciation & extinction).
+
+First, simulate birth & death trees in phytools. phytools function 'pbtree' (even though originally a pure-birth tree simulator only) can simulate under a variety of different models.
+
+Let's simulate under pure-birth using phytools. One experiment that might be fun is to examine the variance in number of lineages among trees given a particular set of simulation conditions:
+
+
+```{r }
+set.seed(10)
+b<-(log(100)-log(2))/100 ## results in E(lineages)=100 after t=100
+b
+```
+
+```{r }
+astertrees <- phytools::pbtree(b=b,t=100,nsim=200)
+n_aster<-sapply(astertrees,Ntip)
+
+mean(n_aster)
+var(n_aster)
+```
+
+```{r }
+hist(n_aster,xlab="number of species",main="number of species",col="grey",breaks=20)
+lines(rep(mean(n_aster),2),par()$usr[3:4],lty="dashed",lwd=2)
+```
+
+From this we can see that the variance under pure-birth can be great. This increases when there is also extinction. For instance:
+
+```{r }
+d_aster<-0.01
+d_astertrees <- phytools::pbtree(b=b+d,d=d,t=100,nsim=200,extant.only=TRUE,quiet=TRUE)
+n_aster<-sapply(d_astertrees,function(x) if(!is.null(x)) Ntip(x) else 0)
+    
+mean(n_aster)
+var(n_aster)
+```
+
+```{r }
+hist(n_aster,xlab="number of species",main="number of species",col="grey",breaks=20)
+lines(rep(mean(n_aster),2),par()$usr[3:4],lty="dashed",lwd=2)
+```
+
+So we can see that the expected number of tips in a tree is determined only by b - d; however the variance increases with d!
+
+### c) Statistical properties of the Nee et al. method
+
+Although some recent papers have criticized the Nee et al. method (and others defended it), the point should still be made that when the model assumptions hold, it does perform just as it is supposed to.
+
+Specifically, we can demonstrate by fitting the model over our simulated distribution of trees, that the birth & death rates are unbiasedly estimated (albeit with substantial variance).
+
+I'm going to start by removing all the trees from our sample that either went extinct (only in the birth-death trees) or left fewer than 10 extant species (we would never fit this model for such a small tree).
+
+```{r}
+## remove any trees with no taxa
+astertrees<-astertrees[!sapply(astertrees,is.null)] 
+## remove any trees with <10 taxa
+astertrees<-astertrees[sapply(astertrees,function(x) length(x$tip.label)>=10)]
+asterobj<-lapply(astertrees,birthdeath)
+```
+
+```{r}
+asterBD<-t(sapply(obj,bd))
+par(mfrow=c(2,1))
+asterhh<-hist(asterBD[,1],breaks=20,xlab="estimated birth rate",main="birth rate")
+lines(rep(mean(asterBD[,1]),2),c(0,max(asterhh$counts)),lty="dotted",lwd=2,col="red")
+asterhh<-hist(asterBD[,2],breaks=20,xlab="estimated death rate",main="death rate")
+lines(rep(mean(asterBD[,2]),2),c(0,max(asterhh$counts)),lty="dotted",lwd=2,col="red")
+```
+
+Now let's try the same thing, but with our birth-death rate:
+
+```{r}
+asterBD<-t(sapply(obj,bd))
+colMeans(asterBD)
+```
+
+```{r}
+asterhh<-hist(asterBD[,1],breaks=20,xlab="estimated birth rate",main="birth rate")
+lines(rep(mean(asterBD[,1]),2),c(0,max(asterhh$counts)),lty="dotted",lwd=2,col="red")
+asterhh<-hist(asterBD[,2],breaks=20,xlab="estimated death rate",main="death rate")
+lines(rep(mean(asterBD[,2]),2),c(0,max(asterhh$counts)),lty="dotted",lwd=2,col="red")
+```
+
+So, we can see that Nee's method allows us to estimate diversification rates from reconstructed birth-death phylogenies; however these parameters are sometimes estimated with wide confidence limits, something that we can understand best by considering the very broad variance in outcome from the generating process.
+
+### d) Fitting a birth-death model using diversitree
+
+Load the 'diversitree' package
+
+```{r }
+library("diversitree")
+```
+
+Now, we can fit a Yule (pure-birth) model using diversitree. The way that the functions of diversitree work, we first built a model - then we use a generic function to optimize it. One of the advantages of diversitree is that it allows us to use incompletely sampled trees, and take that explicitly into consideration when fitting the model. In this case, we know the tree to contain about 128 of 391,000 of described species, more or less 0.19%.
+
+```{r }
+divastertree <- astertree
+aster_pbModel<-make.yule(divastertree,sampling.f=(1287/391000))
+aster_pbMLFit<-find.mle(aster_pbModel,x.init=0.1)
+aster_pbMLFit
+```
+
+Of course, we can also fit a birth-death model:
+
+```{r }
+aster_bdModel<-make.bd(divastertree,sampling.f=736/391000)
+aster_bdMLFit<-find.mle(aster_bdModel,c(0.1,0.05),method = "optim",lower = 0)
+aster_bdMLFit
+```
+
+Again, using diversitree it is easy to compare the two models. This is essentially a test for the signature of extinction in our tree.
+
+```{r }
+# compare models
+anova(aster_bdMLFit, pure.birth = aster_pbMLFit)
+```
+
+""Here we see that although our MLE for the extinction rate is non-zero, the model does not significantly increase fit.""????
+
+Let's visualize the likelihood surface for λ & μ to see how broad it is for the extinction rate, μ.
+
+```{r }
+aster_b<-seq(0.1,10,by=0.1)*aster_pbMLFit$par[1]
+aster_d<-aster_b
+aster_L<-sapply(b,function(aster_d) sapply(aster_d,function(aster_d,aster_b) bdModel(c(aster_b,aster_d)),b=aster_b),d=aster_)
+persp(aster_b,aster_d,aster_L,phi=45,theta=-45)
+```
+
+```{r }
+contour(b,d,L,nlevels=50)
+filled.contour(b,d,L,nlevels=50,color.palette=heat.colors)
+```
+
+Finally, diversitree also very easily permits us to design and run a Bayesian MCMC analysis of diversification. We do that as follows:
+
+```{r }
+aster_bdSamples <- mcmcaster_(bdModel, aster_bdMLFit$par, nsteps = 1e+05, lower = c(0, 0), 
+    upper = c(Inf,Inf), w = c(0.1, 0.1), fail.value = -Inf, 
+    print.every = 10000)
+```
+
+```{r }
+## visualize the posterior sample
+aster_postSamples <- aster_bdSamples[c("lambda", "mu")]
+profiles.plot(aster_postSamples, col.line = c("red", "blue"), las = 1, legend = "topright")
+```
+
+```{r }
+# often estimates of r (= lambda-mu) are more precise than either lambda and
+# mu
+aster_postSamples$r <- with(aster_bdSamples, lambda - mu)
+aster_postSamples$eps <- with(aster_bdSamples, mu/lambda)
+profiles.plotaster_(postSamples[, c("r", "eps")], col.line = c("red", "blue"), las = 1, 
+    legend = "topright")
+```
+
+## QuaSSE
+
+Assume standard deviation of 1/50 for all species – this comes from nowhere in particular, and is probably over-confident in the terminal velocity estimates for most species.
+
+```{r }
+astertrait.sd <- 1/20
+```
+
+```{r}
+f.cc <- make.quasse.split(myastertree, astertrait, astertrait.sd, constant.x, constant.x,
+                          2094, Inf, sampling.f=(186/32913))
+argnames(f.cc)
+g.cc <- constrain(f.cc, drift.1 ~ 0, drift.2 ~ 0,diffusion.2 ~ diffusion.1)
+argnames(g.cc)
+p.cc <- c(p.c, p.c[1:2])
+names(p.cc) <- argnames(g.cc)
+mle.c$lnLik - g.cc(p.cc)
+mle.cc <- find.mle(g.cc, p.cc, control=control, lower=0, verbose=0)
+```
+
+```{r}
+f.ll <- make.quasse.split(myastertree, astertrait, astertrait.sd, linear.x, constant.x,
+                          2094, Inf, sampling.f=(186/32913))
+g.ll <- constrain(f.ll, drift.1 ~ 0, drift.2 ~ 0,diffusion.2 ~ diffusion.1)
+g.lc <- constrain(g.ll, l.m.2 ~ 0)
+g.cl <- constrain(g.ll, l.m.1 ~ 0)
+#Generate a starting points: start with the function where both speciation rates are linear functions.
+p.cc <- coef(mle.cc)
+p.ll <- c(p.cc[1], 0, p.cc[2:4], 0, p.cc[5])
+names(p.ll) <- argnames(g.ll)
+#Run the ML searches for this model:
+mle.ll <- find.mle(g.ll, p.ll, control=control, verbose=0)
+```
+
+```{r}
+#Then generate starting points for models with just one of the sections of the tree having a linear speciation function:
+p.lc <- c(coef(mle.ll)[1:3], p.ll[c(4, 5, 7)])
+p.cl <- c(p.ll[c(1, 3, 4)], coef(mle.ll)[5:7])
+#and run the ML search:
+mle.lc <- find.mle(g.lc, p.lc, control=control, verbose=0)
+mle.cl <- find.mle(g.cl, p.cl, control=control, verbose=0)
+```
+
+```{r}
+#We can then compare the models again:
+anova(mle.cc,
+      part.linear.bg=mle.lc,
+      part.linear.fg=mle.cl,
+      part.linear=mle.ll)
+```
+
+Run the fits with the drift parameter added, starting from the constrained model’s ML parameters:
+
+```{r}
+mle.nd.lc <- find.mle(nodrift(g.lc), coef(mle.lc, TRUE), control=control, verbose=0)
+mle.nd.cl <- find.mle(nodrift(g.cl), coef(mle.cl, TRUE), control=control, verbose=0) 
+mle.nd.ll <- find.mle(nodrift(g.ll), coef(mle.ll, TRUE), control=control, verbose=0)  
+
+coef(mle.ll)
+```
+```{r}
+```
+
+
+## e) ES-sim
+
+Load the function from source as it is not compiled in a package on CRAN or in one easily accessible on GitHub
+
+```{r ES-sim}
+source("~/Documents/GitHub/PhyloTV/ES-sim-master/R/essim.R")
+essim(astertree, astertrait, nsim = 1000)
+```
+
+## f) BAMM
+
+```{r BAMMtreesetup}
+asterBAMMtree <- astertree
+options(scipen = 999)
+asterBAMMtree$edge.length <- format(asterBAMMtree$edge.length, scientific = FALSE)
+asterBAMMtree$edge.length <- as.numeric(asterBAMMtree$edge.length) + 0.00001
+asterBAMMtree$edge.length
+```
+
+```{r saveBAMMTree}
+write.tree(asterBAMMtree, "ASTER_BAMMTREE.newick")
+write.tree(asterBAMMtree, "ASTER_BAMMTREE.tre")
+aster_NWK_BAMM_Tree <- read.newick("ASTER_BAMMTREE.newick")
+aster_TRE_BAMM_Tree <- read.tree("ASTER_BAMMTREE.tre")
+```
+
+```{r}
+aster$species <- sub(" ", "_", aster$species)
+write.csv(aster, "asterastertraitfile.csv")
+```
+
+Now the data is ready to be used
+
+## Load BAMMtools package
+```{r libBAMMtools}
+library("BAMMtools")
+```
+
+```{r swtBAMMPriors}
+#get bamm priors to supply to control file
+setBAMMpriors(read.tree("ASTER_BAMMTREE.newick"))
+readLines("myASTERPriors.txt")
+
+```
+#[https://rdrr.io/cran/BAMMtools/man/generateControlFile.html]
+
+The globalSamplingFraction is 736/391000 or `r 736/391000` 
+`r length(astertrait)`, which refers to the 736 species in the dataset out of 391000 vascular plants (State of the World's Plants, 2016)
+```{r}
+generateControlFile(file = 'ASTER_SE_control.txt',
+    params = list(
+    treefile = 'ASTER_BAMMTREE.newick',
+    globalSamplingFraction = '0.00188235294',
+    numberOfGenerations = '100000',
+    overwrite = '1',
+    #lambdaInitPrior = as.numeric(priors['lambdaInitPrior']),
+    #lambdaShiftPrior = as.numeric(priors['lambdaShiftPrior']),
+    #muInitPrior = as.numeric(priors['muInitPrior']),
+    expectedNumberOfShifts = '1'))
+
+#tx <- readLines("ASTER_SE_control.txt")
+#tx  <- gsub(replace = "lambdaInitPrior = character(0)", pattern = "lambdaInitPrior = 13.2230144633187", x = tx)
+#tx <- gsub(replace = "lambdaShiftPrior = character(0)", pattern =  "lambdaShiftPrior = 0.00294671976366971", x = tx)
+#tx <- gsub(replace = "muInitPrior = character(0)", pattern = "muInitPrior = 13.2230144633187", x = tx)
+#tx
+#writeLines(tx, "ASTER_SE_control.txt")
+
+readLines("ASTER_SE_control.txt")
+```
+
+```{r }
+generateControlFile(file = 'ASTER_traitcontrolr.txt', type = "trait",
+    params = list(
+    treefile = 'ASTER_BAMMTREE.newick',
+    #treefile = 'ASTER_Tree.tre',
+    traitfile = "ASTER_traitfile.txt",
+    #globalSamplingFraction = '0.00188235294', 736/391000 #DOI: 10.11646/phytotaxa.261.3.1
+    numberOfGenerations = '100000',
+    overwrite = '1',
+    #lambdaInitPrior = "13.2230144633187",          
+    #lambdaShiftPrior = "0.00294671976366971",         
+    #muInitPrior = "13.2230144633187",
+    expectedNumberOfShifts = '1'))
+readLines("ASTER_traitcontrolr.txt")
+```
+
+```{bash BAMMterminalA, eval=FALSE, include=FALSE}
+cd ~/Documents/GitHub/Terminal-Velocity
+bamm -c ASTER_traitcontrolr.txt
+```
+
+```{bash BAMMterminalB}
+cd ~/Documents/GitHub/Terminal-Velocity
+bamm -c ASTER_SE_control.txt
+```
+
+```{r }
+#eventfile <- read.csv("event_data_template_trait.txt")
+#eventfile
+aster.eventdata <- getEventData(ASTER_NWK_BAMM_Tree, eventdata = "ASTER_event_data.txt", 
+                          type ='trait', burnin=0.5)
+summary(astereventdata)
+```
+
+Get prior distribution on shifts-per-branch:
+
+```{r }
+aster.bp <- getBranchShiftPriors(aster_NWK_BAMM_Tree, expectedNumberOfShifts = 5)
+```
+
+Pass the event data object in to the function:
+
+```{r }
+aster.best <- getBestShiftConfiguration(aster.eventdata, expectedNumberOfShifts = 5,
+                                  threshold = 30)
+plot(aster.best, lwd=2)
+```
+
+
+```{r }
+addBAMMshifts(aster.best, cex=2)
+```
+
+Now we can also work with the credible shift set:
+```{r }
+aster.css <- credibleShiftSet(aster.eventdata, expectedNumberOfShifts = 5, threshold = 30)
+
+summary(aster.css)
+
+# examine model-averaged shifts from MAP configuration-
+# This gives us parameters, times, and associated nodes
+#   of each evolutionary rate regime (note that one of
+#   them corresponds to the root)
+aster.css$eventData[[1:5]]
+```
+# Get bammdata representation of MAP configuration:
+```{r }
+aster.bestcss <- getBestShiftConfiguration(css, expectedNumberOfShifts = 5,
+                                  threshold = 30)
+plot(aster.bestcss)
+addBAMMshifts(aster.bestcss)
+```
+
+```{r}
+# The first call to plot.bammdata
+# No calculations or assignments of rates have been made
+aster.ed <- aster.eventdata
+```
+```{r}
+## Not run: 
+# now plot.bammdata no longer calls dtRates
+aster.ed_dtRates <- dtRates(aster.ed, tau = 0.01)
+plot(aster.ed_dtRates, lwd = 3, spex = "s")
+# color options
+plot(aster.ed_dtRates, pal="temperature",lwd=3)
+plot(aster.ed_dtRates, pal="terrain",lwd=3)
+plot(aster.ed_dtRates, pal=c("darkgreen","yellow2","red"),lwd=3)
+plot(aster.ed_dtRates,method="polar",pal="Spectral", lwd=3)
+plot(aster.ed_dtRates,method="polar",pal="RdYlBu", lwd=3)
+```
+
+```{r}
+# Compare the different color breaks methods
+par(mfrow=c(1,3))
+plot(aster.ed, lwd = 3, spex = "s", breaksmethod = "linear")
+title(main="linear")
+plot(aster.ed, lwd = 3, spex = "s", breaksmethod = "quantile")
+title(main="quantile")
+plot(aster.ed, lwd = 3, spex = "s", breaksmethod = "jenks")
+title(main="jenks")
+```
+
+```{r subtreeBAMM, eval=FALSE, include=FALSE}
+# you can plot subtrees while preserving the original 
+# rates to colors map by passing the colorbreaks object as an argument
+aster.sed <- subtreeBAMM(ed, node = 2094)
+plot(aster.sed, lwd = 3, colorbreaks = xx$colorbreaks)
+# note how if we do not pass colorbreaks the map is 
+# no longer relative to the rest of the tree and the plot is quite
+# distinct from the original
+plot(aster.sed, lwd = 3)
+
+# if you want to change the value of tau and the rates to colors map for
+# the entire tree
+aster.ed <- dtRates(aster.ed, tau = 0.002)
+aster.xx <- plot(aster.ed, lwd = 3, spex = "s")
+# now you can re-plot the subtrees using this finer tau partition
+aster.sed <- subtreeBAMM(aster.ed, node = 2094)
+aster.sed <- dtRates(aster.sed, 0.002)
+plot(aster.sed, lwd = 3, colorbreaks = aster.xx$colorbreaks)
+```
+
+```{r}
+# multi-panel plotting and adding shifts of specific posterior samples
+par(mfrow=c(2,3))
+samples <- sample(1:length(aster.ed$eventData), 6) #samples <- sample(1:length(aster.ed$aster.eventData), 6)
+
+aster.ed <- dtRates(aster.ed, 0.005)
+# individual plots will have a color map relative to the mean
+xx <- plot(ed, show=FALSE)
+for (i in 1:6) {
+    aster.ed <- dtRates(aster.ed, 0.005, samples[i])
+    plot(aster.ed, colorbreaks=aster.xx$colorbreaks)
+    addBAMMshifts(aster.ed,index=samples[i],method="phylogram", par.reset=FALSE)	
+}
+```
+```{r}
+library("parallel")
+aster.x <- traitDependentBAMM(ephy = aster.ed, traits = aster, reps = 1000, rate = "extinction",
+                        return.full = TRUE, method = 's', logrates = TRUE,
+                        two.tailed = TRUE, traitorder = "positive,", nthread = 2)
+
+```
+
+
+
+
+
+
